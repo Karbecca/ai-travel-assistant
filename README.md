@@ -104,6 +104,8 @@ curl -s -X POST http://127.0.0.1:8000/trips ^
 curl -s http://127.0.0.1:8000/trips -H "Authorization: Bearer YOUR_TOKEN_HERE"
 ```
 
+`POST /trips` responses include **`message`: `"Trip created successfully"`** (same idea as the course examples). List and single-trip `GET` responses return trip fields only (no `message`).
+
 ### 4. Itineraries
 
 ```bash
@@ -116,6 +118,36 @@ curl -s http://127.0.0.1:8000/itineraries/1 -H "Authorization: Bearer YOUR_TOKEN
 ```
 
 On Unix, replace `^` line continuations with `\`.
+
+## Response shapes (course brief)
+
+Successful **`POST /trips`** body:
+
+```json
+{
+  "id": 1,
+  "destination": "Paris",
+  "days": 5,
+  "budget": 1500,
+  "trip_style": "budget",
+  "message": "Trip created successfully"
+}
+```
+
+Successful **`POST /itineraries`** body:
+
+```json
+{
+  "trip_id": 1,
+  "itinerary": [
+    { "day": 1, "activities": ["Eiffel Tower", "Seine River Walk"] },
+    { "day": 2, "activities": ["Louvre Museum", "Montmartre"] }
+  ],
+  "message": "Itinerary created successfully"
+}
+```
+
+Successful **`GET /itineraries/{trip_id}`** body: same `trip_id` and `itinerary` array, without `message`.
 
 ## Error responses
 

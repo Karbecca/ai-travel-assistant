@@ -47,6 +47,7 @@ def _create_trip(client: TestClient, headers: dict[str, str]) -> int:
         headers=headers,
     )
     assert response.status_code == 200
+    assert response.json()["message"] == "Trip created successfully"
     return int(response.json()["id"])
 
 
@@ -79,6 +80,7 @@ def test_itinerary_create_and_get(tmp_path, monkeypatch) -> None:
         fetched = client.get(f"/itineraries/{trip_id}", headers=headers)
         assert fetched.status_code == 200
         assert fetched.json()["itinerary"] == data["itinerary"]
+        assert "message" not in fetched.json()
 
 
 def test_itinerary_post_updates_existing(tmp_path, monkeypatch) -> None:

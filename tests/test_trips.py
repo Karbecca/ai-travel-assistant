@@ -60,14 +60,17 @@ def test_trip_crud_happy_path(tmp_path, monkeypatch) -> None:
         created_trip = create_response.json()
         trip_id = created_trip["id"]
         assert created_trip["destination"] == "Paris"
+        assert created_trip["message"] == "Trip created successfully"
 
         list_response = client.get("/trips", headers=headers)
         assert list_response.status_code == 200
         assert len(list_response.json()) == 1
+        assert "message" not in list_response.json()[0]
 
         get_response = client.get(f"/trips/{trip_id}", headers=headers)
         assert get_response.status_code == 200
         assert get_response.json()["trip_style"] == "budget"
+        assert "message" not in get_response.json()
 
         update_response = client.put(
             f"/trips/{trip_id}",
@@ -77,6 +80,7 @@ def test_trip_crud_happy_path(tmp_path, monkeypatch) -> None:
         assert update_response.status_code == 200
         assert update_response.json()["budget"] == 1800
         assert update_response.json()["trip_style"] == "midrange"
+        assert "message" not in update_response.json()
 
         delete_response = client.delete(f"/trips/{trip_id}", headers=headers)
         assert delete_response.status_code == 204
