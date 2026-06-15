@@ -11,6 +11,7 @@ from app.models.trip import Trip
 from app.models.user import User
 from app.schemas.itinerary import ItineraryCreate, ItineraryCreateResponse, ItineraryDayPublic, ItineraryPublic
 from app.services.audit_log import record_itinerary_saved
+from app.services.llm_itinerary import LLMConfigurationError, LLMResponseError, generate_itinerary_days
 
 router = APIRouter(tags=["Itineraries"])
 
@@ -27,6 +28,19 @@ def _payload_to_public_days(payload: list) -> list[ItineraryDayPublic]:
     return [ItineraryDayPublic.model_validate(row) for row in ordered]
 
 
+def _upsert_itinerary(db: Session, trip_id: int, stored: list[dict[str, object]]) -> Itinerary:
+    existing = db.scalars(select(Itinerary).where(Itinerary.trip_id == trip_id)).first()
+    if existing is None:
+        row = Itinerary(trip_id=trip_id, days_payload=stored)
+        db.add(row)
+    else:
+        existing.days_payload = stored
+        row = existing
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 @router.post("", response_model=ItineraryCreateResponse)
 def create_or_update_itinerary(
     payload: ItineraryCreate,
@@ -34,32 +48,44 @@ def create_or_update_itinerary(
     db: Annotated[Session, Depends(get_db)],
     current_user: Annotated[User, Depends(get_current_user)],
 ) -> ItineraryCreateResponse:
-    _trip_owned_or_404(db, payload.trip_id, current_user.id)
+    trip = _trip_owned_or_404(db, payload.trip_id, current_user.id)
 
-    stored = [{"day": d.day, "activities": list(d.activities)} for d in payload.days]
-    existing = db.scalars(select(Itinerary).where(Itinerary.trip_id == payload.trip_id)).first()
-
-    if existing is None:
-        row = Itinerary(trip_id=payload.trip_id, days_payload=stored)
-        db.add(row)
+    if payload.generate:
+        try:
+            stored = generate_itinerary_days(
+                destination=trip.destination,
+                days=trip.days,
+                budget=float(trip.budget),
+                trip_style=trip.trip_style,
+            )
+        except LLMConfigurationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(exc),
+            ) from exc
+        except LLMResponseError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+        message = "Itinerary generated successfully"
     else:
-        existing.days_payload = stored
-        row = existing
+        stored = [{"day": d.day, "activities": list(d.activities)} for d in payload.days]
+        message = "Itinerary created successfully"
 
-    db.commit()
-    db.refresh(row)
+    row = _upsert_itinerary(db, payload.trip_id, stored)
 
     background_tasks.add_task(
         record_itinerary_saved,
         trip_id=payload.trip_id,
         user_id=current_user.id,
-        day_count=len(payload.days),
+        day_count=len(stored),
     )
 
     return ItineraryCreateResponse(
         trip_id=payload.trip_id,
         itinerary=_payload_to_public_days(row.days_payload),
-        message="Itinerary created successfully",
+        message=message,
     )
 
 
