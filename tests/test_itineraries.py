@@ -1,4 +1,5 @@
 import importlib
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -18,8 +19,10 @@ def _reload_app() -> object:
     import app.routers.itineraries as itineraries_module
     import app.routers.trips as trips_module
     import app.routers.users as users_module
+    import app.services.llm_itinerary as llm_itinerary_module
 
     importlib.reload(database_module)
+    importlib.reload(llm_itinerary_module)
     importlib.reload(user_module)
     importlib.reload(trip_module)
     importlib.reload(itinerary_module)
@@ -136,3 +139,99 @@ def test_itinerary_authz_and_not_found(tmp_path, monkeypatch) -> None:
         assert client.get(f"/itineraries/{trip_id}", headers=owner_headers).status_code == 404
 
         assert client.post("/itineraries", json={"trip_id": 99999, "days": []}, headers=owner_headers).status_code == 404
+
+
+def test_itinerary_generate_with_ai(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "itin_ai.sqlite"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path.as_posix()}")
+
+    app = _reload_app()
+
+    with TestClient(app) as client:
+        token = _register_and_login(client, "ai_planner@example.com")
+        headers = {"Authorization": f"Bearer {token}"}
+        trip_id = _create_trip(client, headers)
+
+        mock_days = [{"day": i, "activities": [f"Activity {i}a", f"Activity {i}b"]} for i in range(1, 6)]
+
+        with patch("app.routers.itineraries.generate_itinerary_days", return_value=mock_days):
+            response = client.post(
+                "/itineraries",
+                json={"trip_id": trip_id, "generate": True},
+                headers=headers,
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["trip_id"] == trip_id
+        assert data["message"] == "Itinerary generated successfully"
+        assert len(data["itinerary"]) == 5
+        assert data["itinerary"][0]["activities"] == ["Activity 1a", "Activity 1b"]
+
+        fetched = client.get(f"/itineraries/{trip_id}", headers=headers)
+        assert fetched.status_code == 200
+        assert fetched.json()["itinerary"] == data["itinerary"]
+
+
+def test_itinerary_generate_rejects_days_with_generate_flag(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "itin_ai_invalid.sqlite"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path.as_posix()}")
+
+    app = _reload_app()
+
+    with TestClient(app) as client:
+        token = _register_and_login(client, "ai_invalid@example.com")
+        headers = {"Authorization": f"Bearer {token}"}
+        trip_id = _create_trip(client, headers)
+
+        response = client.post(
+            "/itineraries",
+            json={"trip_id": trip_id, "generate": True, "days": [{"day": 1, "activities": ["A"]}]},
+            headers=headers,
+        )
+        assert response.status_code == 422
+
+
+def test_itinerary_generate_missing_api_key(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "itin_ai_no_key.sqlite"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path.as_posix()}")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+
+    app = _reload_app()
+
+    with TestClient(app) as client:
+        token = _register_and_login(client, "ai_no_key@example.com")
+        headers = {"Authorization": f"Bearer {token}"}
+        trip_id = _create_trip(client, headers)
+
+        response = client.post(
+            "/itineraries",
+            json={"trip_id": trip_id, "generate": True},
+            headers=headers,
+        )
+        assert response.status_code == 503
+
+
+def test_itinerary_generate_llm_failure(tmp_path, monkeypatch) -> None:
+    db_path = tmp_path / "itin_ai_fail.sqlite"
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{db_path.as_posix()}")
+
+    app = _reload_app()
+    import app.services.llm_itinerary as llm_module
+
+    with TestClient(app) as client:
+        token = _register_and_login(client, "ai_fail@example.com")
+        headers = {"Authorization": f"Bearer {token}"}
+        trip_id = _create_trip(client, headers)
+
+        with patch(
+            "app.routers.itineraries.generate_itinerary_days",
+            side_effect=llm_module.LLMResponseError("LLM returned invalid JSON"),
+        ):
+            response = client.post(
+                "/itineraries",
+                json={"trip_id": trip_id, "generate": True},
+                headers=headers,
+            )
+
+        assert response.status_code == 502
