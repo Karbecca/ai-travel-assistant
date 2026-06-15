@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "change-me-in-production-use-a-long-random-secret"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24 * 7
+    anthropic_api_key: str = ""
+    anthropic_model: str = "claude-haiku-4-5-20251001"
+    anthropic_temperature: float = 0.7
+    anthropic_max_tokens: int = 2000
 
     model_config = SettingsConfigDict(
         env_file=".env",
