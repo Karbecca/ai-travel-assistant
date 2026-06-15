@@ -34,8 +34,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     description=(
-        "REST API for trip planning: JWT auth, trips, itineraries, and audit hooks "
-        "after writes. See the repository README for setup and curl examples."
+        "REST API for trip planning: JWT auth, trips, itineraries, and audit hooks after writes."
     ),
     version="0.1.0",
     lifespan=lifespan,
