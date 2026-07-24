@@ -12,22 +12,18 @@ Return ONLY valid JSON with this exact shape:
 Rules:
 - Match the exact number of days specified in the user message
 - Number days from 1 through N with no gaps or duplicates
-- Every activity must be located in or very near the destination area only
+- Every activity must be located in or very near the destination
 - Respect the stated budget and travel style when choosing activities
-- Suggest 3 to 6 realistic activities per day appropriate to the travel style
-- Do not include prices, booking links, or any text outside the JSON object"""
+- Suggest 3 to 6 realistic activities per day
+- Do not include prices, booking links, or any text outside the JSON
+"""
 
 _WEATHER_TOOL = {
     "name": "get_current_weather",
     "description": "Fetch current weather at the destination to inform activity planning.",
     "input_schema": {
         "type": "object",
-        "properties": {
-            "destination": {
-                "type": "string",
-                "description": "City or region name",
-            }
-        },
+        "properties": {"destination": {"type": "string"}},
         "required": ["destination"],
     },
 }
@@ -41,143 +37,111 @@ class LLMResponseError(Exception):
     pass
 
 
-def build_user_prompt(*, destination: str, days: int, budget: float, trip_style: str) -> str:
-    return f"""Plan a {days}-day trip to {destination} with a budget of {budget}.
-The travel style is {trip_style}.
-Include only places and experiences within {destination} or its immediate surroundings.
-Spread activities across all {days} days and keep suggestions realistic for the budget and style.
-Return exactly {days} day entries in the JSON days array."""
+def build_user_prompt(
+    *, destination: str, days: int, budget: float, trip_style: str
+) -> str:
+    return (
+        f"Plan a {days}-day trip to {destination} with a budget of {budget}.\n"
+        f"The travel style is {trip_style}.\n"
+        f"Include only places in {destination} or its immediate surroundings.\n"
+        f"Return exactly {days} day entries in the JSON days array."
+    )
 
 
-def _extract_json_text(raw: str) -> str:
-    text = raw.strip()
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
-    if fence_match:
-        return fence_match.group(1).strip()
-    return text
+def _extract_json(raw: str) -> str:
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw.strip())
+    return m.group(1).strip() if m else raw.strip()
 
 
-def _parse_days_payload(raw: str, expected_days: int) -> list[dict[str, object]]:
+def _parse_days(raw: str, expected: int) -> list[dict]:
     try:
-        data = json.loads(_extract_json_text(raw))
+        data = json.loads(_extract_json(raw))
     except json.JSONDecodeError as exc:
         raise LLMResponseError("LLM returned invalid JSON") from exc
 
-    if not isinstance(data, dict) or "days" not in data:
-        raise LLMResponseError("LLM response missing days array")
+    days = data.get("days") if isinstance(data, dict) else None
+    if not isinstance(days, list) or len(days) != expected:
+        raise LLMResponseError(f"Expected {expected}-item days array")
 
-    days_list = data["days"]
-    if not isinstance(days_list, list):
-        raise LLMResponseError("LLM days field is not a list")
-
-    if len(days_list) != expected_days:
-        raise LLMResponseError(f"LLM returned {len(days_list)} days, expected {expected_days}")
-
-    normalized: list[dict[str, object]] = []
-    seen_days: set[int] = set()
-
-    for entry in days_list:
-        if not isinstance(entry, dict):
-            raise LLMResponseError("Each day entry must be an object")
-        if "day" not in entry or "activities" not in entry:
+    seen, out = set(), []
+    for entry in days:
+        if not isinstance(entry, dict) or "day" not in entry or "activities" not in entry:
             raise LLMResponseError("Each day entry must include day and activities")
-        day_number = entry["day"]
-        activities = entry["activities"]
-        if not isinstance(day_number, int) or day_number < 1:
-            raise LLMResponseError("Each day number must be a positive integer")
-        if day_number in seen_days:
-            raise LLMResponseError("Duplicate day numbers in LLM response")
-        if not isinstance(activities, list) or not all(isinstance(a, str) for a in activities):
+        d, acts = entry["day"], entry["activities"]
+        if not isinstance(d, int) or d < 1 or d in seen:
+            raise LLMResponseError("Invalid or duplicate day number")
+        if not isinstance(acts, list) or not all(isinstance(a, str) for a in acts):
             raise LLMResponseError("Activities must be a list of strings")
-        seen_days.add(day_number)
-        normalized.append({"day": day_number, "activities": list(activities)})
+        seen.add(d)
+        out.append({"day": d, "activities": list(acts)})
 
-    if seen_days != set(range(1, expected_days + 1)):
-        raise LLMResponseError("LLM day numbers must be consecutive from 1 to N")
-
-    normalized.sort(key=lambda row: row["day"])
-    return normalized
+    if seen != set(range(1, expected + 1)):
+        raise LLMResponseError("Day numbers must be consecutive from 1 to N")
+    return sorted(out, key=lambda r: r["day"])
 
 
-def _handle_tool_call(name: str, tool_input: dict) -> str:
-    if name == "get_current_weather":
-        try:
-            result = get_current_weather(tool_input["destination"])
-        except WeatherServiceError as exc:
-            result = {"error": str(exc)}
-        return json.dumps(result)
-    return json.dumps({"error": f"Unknown tool: {name}"})
+def _handle_tool(block) -> dict:
+    try:
+        return get_current_weather(block.input["destination"])
+    except WeatherServiceError as exc:
+        return {"error": str(exc)}
 
 
 def _call_llm(client: Anthropic, settings, user_prompt: str) -> str:
     tools = [_WEATHER_TOOL] if settings.weather_api_key else []
-
-    base_kwargs: dict = {
+    kw = {
         "model": settings.anthropic_model,
         "max_tokens": settings.anthropic_max_tokens,
         "temperature": settings.anthropic_temperature,
         "system": SYSTEM_PROMPT,
     }
     if tools:
-        base_kwargs["tools"] = tools
+        kw["tools"] = tools
 
-    messages: list = [{"role": "user", "content": user_prompt}]
-
+    msgs = [{"role": "user", "content": user_prompt}]
     while True:
-        response = client.messages.create(**base_kwargs, messages=messages)
-
+        response = client.messages.create(**kw, messages=msgs)
         if response.stop_reason != "tool_use":
             break
-
-        messages.append({"role": "assistant", "content": response.content})
-        messages.append({
+        msgs.append({"role": "assistant", "content": response.content})
+        msgs.append({
             "role": "user",
             "content": [
                 {
                     "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": _handle_tool_call(block.name, block.input),
+                    "tool_use_id": b.id,
+                    "content": json.dumps(_handle_tool(b)),
                 }
-                for block in response.content
-                if block.type == "tool_use"
+                for b in response.content if b.type == "tool_use"
             ],
         })
 
-    content = next((block.text for block in response.content if block.type == "text"), None)
+    content = next((b.text for b in response.content if b.type == "text"), None)
     if not content:
         raise LLMResponseError("LLM returned empty response")
     return content
 
 
 def generate_itinerary_days(
-    *,
-    destination: str,
-    days: int,
-    budget: float,
-    trip_style: str,
-) -> list[dict[str, object]]:
+    *, destination: str, days: int, budget: float, trip_style: str
+) -> list[dict]:
     settings = get_settings()
     if not settings.anthropic_api_key:
         raise LLMConfigurationError("LLM service not configured")
 
     client = Anthropic(api_key=settings.anthropic_api_key)
     user_prompt = build_user_prompt(
-        destination=destination,
-        days=days,
-        budget=budget,
-        trip_style=trip_style,
+        destination=destination, days=days, budget=budget, trip_style=trip_style
     )
 
     last_exc: LLMResponseError | None = None
-
     for _ in range(settings.llm_max_retries + 1):
         try:
             raw = _call_llm(client, settings, user_prompt)
         except Exception as exc:
             raise LLMResponseError("LLM service request failed") from exc
-
         try:
-            return _parse_days_payload(raw, expected_days=days)
+            return _parse_days(raw, expected=days)
         except LLMResponseError as exc:
             last_exc = exc
 
