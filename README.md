@@ -46,8 +46,19 @@ Client
                 ▼
          app/services/llm_itinerary.py
                 │
+                ├─ tool call: get_current_weather
+                │       │
+                │       ▼
+                │  app/services/weather.py
+                │       │
+                │       ▼
+                │  OpenWeatherMap API
+                │       │
+                └───────┘
+                │
                 ▼
          Anthropic Claude Messages API
+         (retries up to LLM_MAX_RETRIES on bad output)
                 │
                 ▼
          upsert itineraries table + audit log
@@ -59,7 +70,7 @@ Client
 | Schemas | `app/schemas/` | Request/response validation (Swagger) |
 | Models | `app/models/` | SQLAlchemy tables |
 | Core | `app/core/` | Config, database, JWT |
-| Services | `app/services/` | Audit logging, LLM itinerary generation |
+| Services | `app/services/` | Audit logging, LLM generation, weather lookup |
 | Dependencies | `app/deps.py` | Bearer token → current user |
 
 Tables are created on startup (`create_all` in `app/main.py`); there are no migrations in this repo.
@@ -76,6 +87,8 @@ Provider: **Anthropic Claude** via the official `anthropic` Python SDK.
 | `ANTHROPIC_MODEL` | `claude-haiku-4-5-20251001` | Claude model |
 | `ANTHROPIC_TEMPERATURE` | `0.7` | Creativity vs consistency |
 | `ANTHROPIC_MAX_TOKENS` | `2000` | Upper bound on response length |
+| `LLM_MAX_RETRIES` | `2` | Retry attempts when the LLM returns unparseable output |
+| `WEATHER_API_KEY` | (empty) | OpenWeatherMap API key; enables the weather tool |
 
 ### Prompt design
 
@@ -122,6 +135,20 @@ Response shape (both modes):
 }
 ```
 
+### Structured output and validation
+
+The LLM is required to return JSON in a fixed shape (`{"days": [{"day": N, "activities": [...]}]}`). `app/services/llm_itinerary.py` validates every field: day count, consecutive numbering, no duplicates, activities as strings. Invalid responses raise `LLMResponseError` and trigger a retry.
+
+### Retry on invalid output
+
+If the LLM returns malformed or structurally incorrect JSON, the service retries the full LLM call up to `LLM_MAX_RETRIES` times (default `2`, so three attempts total). API-level failures (network errors, auth) are not retried and surface immediately as `502`.
+
+### Weather tool
+
+When `WEATHER_API_KEY` is set, the LLM is offered a `get_current_weather` tool via Anthropic's tool use API. Claude may call this before generating the itinerary to incorporate live weather conditions into activity planning. If the weather API is unavailable, the error is returned as the tool result and generation continues without weather context.
+
+The weather service lives in `app/services/weather.py` and calls the OpenWeatherMap `/data/2.5/weather` endpoint.
+
 ### Model behavior
 
 - **Temperature** `0.7` balances varied suggestions with repeatable structure.
@@ -134,6 +161,7 @@ Response shape (both modes):
 - Budget is guidance only — no real-time pricing or currency conversion.
 - Destination scope relies on prompt instructions; the model may occasionally suggest nearby cities.
 - AI generation requires a valid `ANTHROPIC_API_KEY`; otherwise the API returns `503`.
+- Weather tool requires a valid `WEATHER_API_KEY`; without it the tool is simply not offered to the model.
 
 ## Layout
 

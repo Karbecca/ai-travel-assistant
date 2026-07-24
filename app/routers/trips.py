@@ -8,13 +8,13 @@ from app.core.database import get_db
 from app.deps import get_current_user
 from app.models.trip import Trip
 from app.models.user import User
-from app.schemas.trip import TripCreate, TripPublic, TripUpdate
+from app.schemas.trip import TripCreate, TripCreateResponse, TripPublic, TripUpdate
 from app.services.audit_log import record_trip_created
 
 router = APIRouter(tags=["Trips"])
 
 
-@router.post("", response_model=TripPublic)
+@router.post("", response_model=TripCreateResponse)
 def create_trip(
     payload: TripCreate,
     background_tasks: BackgroundTasks,
