@@ -38,6 +38,8 @@ Client
   │
   ├─ POST /auth/register, /auth/login  →  JWT
   ├─ CRUD /trips                       →  trips table
+  ├─ POST /knowledge                   →  add travel document → LanceDB vector store
+  ├─ GET  /knowledge/search            →  semantic search over knowledge base
   └─ POST /itineraries                 →  manual days OR LLM generation
          │
          ├─ manual: client sends days[]
@@ -46,13 +48,20 @@ Client
                 ▼
          app/services/llm_itinerary.py
                 │
+                ├─ RAG: search knowledge base for destination context
+                │       │
+                │       ▼
+                │  app/services/knowledge_base.py
+                │       │
+                │       ▼
+                │  LanceDB (vector store, ./vector_store)
+                │       │
+                └───────┘  context injected into system prompt
+                │
                 ├─ tool call: get_current_weather
                 │       │
                 │       ▼
-                │  app/services/weather.py
-                │       │
-                │       ▼
-                │  OpenWeatherMap API
+                │  app/services/weather.py  →  OpenWeatherMap API
                 │       │
                 └───────┘
                 │
@@ -70,7 +79,7 @@ Client
 | Schemas | `app/schemas/` | Request/response validation (Swagger) |
 | Models | `app/models/` | SQLAlchemy tables |
 | Core | `app/core/` | Config, database, JWT |
-| Services | `app/services/` | Audit logging, LLM generation, weather lookup |
+| Services | `app/services/` | Audit logging, LLM generation, weather lookup, knowledge base |
 | Dependencies | `app/deps.py` | Bearer token → current user |
 
 Tables are created on startup (`create_all` in `app/main.py`); there are no migrations in this repo.
@@ -89,6 +98,7 @@ Provider: **Anthropic Claude** via the official `anthropic` Python SDK.
 | `ANTHROPIC_MAX_TOKENS` | `2000` | Upper bound on response length |
 | `LLM_MAX_RETRIES` | `2` | Retry attempts when the LLM returns unparseable output |
 | `WEATHER_API_KEY` | (empty) | OpenWeatherMap API key; enables the weather tool |
+| `VECTOR_STORE_PATH` | `./vector_store` | Directory where LanceDB persists the knowledge base |
 
 ### Prompt design
 
@@ -163,8 +173,47 @@ The weather service lives in `app/services/weather.py` and calls the OpenWeather
 - AI generation requires a valid `ANTHROPIC_API_KEY`; otherwise the API returns `503`.
 - Weather tool requires a valid `WEATHER_API_KEY`; without it the tool is simply not offered to the model.
 
+## RAG (Retrieval-Augmented Generation)
+
+The knowledge base allows you to store curated travel documents (guides, local tips, hidden gems, FAQs) that the AI uses when generating itineraries.
+
+### How it works
+
+1. **Add documents** — `POST /knowledge` stores a travel document in the LanceDB vector store.
+2. **Embedding** — each document is embedded using feature-hashing (bag-of-words, 384 dimensions, cosine similarity). No external embedding API is needed.
+3. **Retrieval** — when `generate: true` is called, the system searches the vector store for the top-3 most relevant documents for the destination.
+4. **Augmentation** — retrieved documents are injected into the Claude system prompt under a `### Local Knowledge` section before generation begins.
+5. **Fallback** — if the knowledge base is empty or unavailable, generation continues normally without context.
+
+### API usage
+
+Add a travel document:
+
+```bash
+curl -X POST http://127.0.0.1:8000/knowledge \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "title": "Hidden gems in Paris",
+    "content": "Visit the covered passages like Galerie Vivienne. The Promenade Plantée is a green walkway built on an old railway viaduct.",
+    "destination": "Paris",
+    "category": "hidden gems"
+  }'
+```
+
+Search the knowledge base:
+
+```bash
+curl "http://127.0.0.1:8000/knowledge/search?query=Paris+outdoor+activities&limit=3" \
+  -H "Authorization: Bearer <token>"
+```
+
+### Vector store
+
+LanceDB is used as the vector store, persisted to `./vector_store` by default. Embeddings use a feature-hashing approach (pure Python + numpy) — no external embedding model or API key required. In a production system this would be replaced with a dedicated embedding model such as Voyage AI or sentence-transformers.
+
 ## Layout
 
-Routers live under `app/routers/`, Pydantic models under `app/schemas/`, tables under `app/models/`, config and DB under `app/core/`, shared auth dependency in `app/deps.py`. `app/services/` holds audit logging and LLM itinerary generation.
+Routers live under `app/routers/`, Pydantic models under `app/schemas/`, tables under `app/models/`, config and DB under `app/core/`, shared auth dependency in `app/deps.py`. `app/services/` holds audit logging, LLM generation, weather lookup, and the knowledge base.
 
 `POST /itineraries` supports manual `days` or `generate: true` for AI. Responses include a `message` field; full request/response shapes are in `/docs`.

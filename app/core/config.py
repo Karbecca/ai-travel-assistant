@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     anthropic_max_tokens: int = 2000
     llm_max_retries: int = 2
     weather_api_key: str = ""
+    vector_store_path: str = "./vector_store"
 
     model_config = SettingsConfigDict(
         env_file=".env",
