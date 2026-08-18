@@ -1,11 +1,4 @@
-"""
-Vector knowledge base backed by LanceDB.
-
-Embeddings are computed with feature hashing (bag-of-words, 384 dims) —
-a pure-Python approach that requires no external embedding API or compiled
-model. Production systems would swap this for a dedicated embedding model
-such as Voyage AI or sentence-transformers.
-"""
+"""Vector knowledge base backed by LanceDB with feature-hashing embeddings (pure Python, no external API)."""
 import re
 from hashlib import md5
 
