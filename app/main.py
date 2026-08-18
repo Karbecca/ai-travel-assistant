@@ -7,6 +7,7 @@ from app.core.database import Base, engine
 from app.routers.auth import router as auth_router
 from app.routers.health import router as health_router
 from app.routers.itineraries import router as itineraries_router
+from app.routers.knowledge import router as knowledge_router
 from app.routers.trips import router as trips_router
 from app.routers.users import router as users_router
 
@@ -18,6 +19,7 @@ _OPENAPI_TAGS = [
     {"name": "Users", "description": "Authenticated user profile."},
     {"name": "Trips", "description": "CRUD for trips owned by the current user."},
     {"name": "Itineraries", "description": "Create and fetch itineraries linked to a trip."},
+    {"name": "Knowledge", "description": "Travel knowledge base: add documents and run semantic search."},
 ]
 
 
@@ -46,3 +48,4 @@ app.include_router(auth_router, prefix="/auth")
 app.include_router(users_router, prefix="/users")
 app.include_router(trips_router, prefix="/trips")
 app.include_router(itineraries_router, prefix="/itineraries")
+app.include_router(knowledge_router, prefix="/knowledge")
