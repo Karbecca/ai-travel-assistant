@@ -4,9 +4,10 @@ import re
 from anthropic import Anthropic
 
 from app.core.config import get_settings
+from app.services import knowledge_base
 from app.services.weather import WeatherServiceError, get_current_weather
 
-SYSTEM_PROMPT = """You are a travel itinerary planner.
+_BASE_SYSTEM_PROMPT = """You are a travel itinerary planner.
 Return ONLY valid JSON with this exact shape:
 {"days": [{"day": 1, "activities": ["activity 1", "activity 2"]}, ...]}
 Rules:
@@ -17,6 +18,26 @@ Rules:
 - Suggest 3 to 6 realistic activities per day
 - Do not include prices, booking links, or any text outside the JSON
 """
+
+
+def _build_system_prompt(destination: str) -> str:
+    """Augment the base system prompt with retrieved knowledge base context."""
+    try:
+        hits = knowledge_base.search(destination, n_results=3, destination_filter="")
+    except Exception:
+        hits = []
+
+    if not hits:
+        return _BASE_SYSTEM_PROMPT
+
+    context_lines = "\n".join(
+        f"- [{h['title']}] {h['content']}" for h in hits
+    )
+    return (
+        _BASE_SYSTEM_PROMPT
+        + f"\n### Local Knowledge\nUse the following curated travel information "
+        f"about {destination} when choosing activities:\n{context_lines}\n"
+    )
 
 _WEATHER_TOOL = {
     "name": "get_current_weather",
@@ -87,13 +108,13 @@ def _handle_tool(block) -> dict:
         return {"error": str(exc)}
 
 
-def _call_llm(client: Anthropic, settings, user_prompt: str) -> str:
+def _call_llm(client: Anthropic, settings, user_prompt: str, system_prompt: str) -> str:
     tools = [_WEATHER_TOOL] if settings.weather_api_key else []
     kw = {
         "model": settings.anthropic_model,
         "max_tokens": settings.anthropic_max_tokens,
         "temperature": settings.anthropic_temperature,
-        "system": SYSTEM_PROMPT,
+        "system": system_prompt,
     }
     if tools:
         kw["tools"] = tools
@@ -130,6 +151,7 @@ def generate_itinerary_days(
         raise LLMConfigurationError("LLM service not configured")
 
     client = Anthropic(api_key=settings.anthropic_api_key)
+    system_prompt = _build_system_prompt(destination)
     user_prompt = build_user_prompt(
         destination=destination, days=days, budget=budget, trip_style=trip_style
     )
@@ -137,7 +159,7 @@ def generate_itinerary_days(
     last_exc: LLMResponseError | None = None
     for _ in range(settings.llm_max_retries + 1):
         try:
-            raw = _call_llm(client, settings, user_prompt)
+            raw = _call_llm(client, settings, user_prompt, system_prompt)
         except Exception as exc:
             raise LLMResponseError("LLM service request failed") from exc
         try:
