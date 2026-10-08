@@ -2,11 +2,6 @@ import os
 
 
 def pytest_configure() -> None:
-    """Force test isolation from developer `.env` (PostgreSQL, secrets).
-
-    Runs before test collection so imports see consistent settings.
-    """
-
     os.environ["DATABASE_URL"] = "sqlite:///./test_app.db"
     os.environ.setdefault(
         "JWT_SECRET_KEY",

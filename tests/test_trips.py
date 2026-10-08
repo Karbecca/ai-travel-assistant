@@ -60,6 +60,7 @@ def test_trip_crud_happy_path(tmp_path, monkeypatch) -> None:
         created_trip = create_response.json()
         trip_id = created_trip["id"]
         assert created_trip["destination"] == "Paris"
+        assert created_trip["message"] == "Trip created successfully"
 
         list_response = client.get("/trips", headers=headers)
         assert list_response.status_code == 200

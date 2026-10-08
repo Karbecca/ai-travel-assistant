@@ -5,9 +5,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "AI Travel Assistant"
-    app_env: str = "development"
-    app_host: str = "127.0.0.1"
-    app_port: int = 8000
     database_url: str = "sqlite:///./ai_travel_assistant.db"
     jwt_secret_key: str = "change-me-in-production-use-a-long-random-secret"
     jwt_algorithm: str = "HS256"
@@ -16,6 +13,8 @@ class Settings(BaseSettings):
     anthropic_model: str = "claude-haiku-4-5-20251001"
     anthropic_temperature: float = 0.7
     anthropic_max_tokens: int = 2000
+    llm_max_retries: int = 2
+    weather_api_key: str = ""
 
     model_config = SettingsConfigDict(
         env_file=".env",

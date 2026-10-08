@@ -4,6 +4,7 @@ import re
 from anthropic import Anthropic
 
 from app.core.config import get_settings
+from app.services.weather import WeatherServiceError, get_current_weather
 
 SYSTEM_PROMPT = """You are a travel itinerary planner.
 Return ONLY valid JSON with this exact shape:
@@ -15,6 +16,21 @@ Rules:
 - Respect the stated budget and travel style when choosing activities
 - Suggest 3 to 6 realistic activities per day appropriate to the travel style
 - Do not include prices, booking links, or any text outside the JSON object"""
+
+_WEATHER_TOOL = {
+    "name": "get_current_weather",
+    "description": "Fetch current weather at the destination to inform activity planning.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "destination": {
+                "type": "string",
+                "description": "City or region name",
+            }
+        },
+        "required": ["destination"],
+    },
+}
 
 
 class LLMConfigurationError(Exception):
@@ -83,6 +99,56 @@ def _parse_days_payload(raw: str, expected_days: int) -> list[dict[str, object]]
     return normalized
 
 
+def _handle_tool_call(name: str, tool_input: dict) -> str:
+    if name == "get_current_weather":
+        try:
+            result = get_current_weather(tool_input["destination"])
+        except WeatherServiceError as exc:
+            result = {"error": str(exc)}
+        return json.dumps(result)
+    return json.dumps({"error": f"Unknown tool: {name}"})
+
+
+def _call_llm(client: Anthropic, settings, user_prompt: str) -> str:
+    tools = [_WEATHER_TOOL] if settings.weather_api_key else []
+
+    base_kwargs: dict = {
+        "model": settings.anthropic_model,
+        "max_tokens": settings.anthropic_max_tokens,
+        "temperature": settings.anthropic_temperature,
+        "system": SYSTEM_PROMPT,
+    }
+    if tools:
+        base_kwargs["tools"] = tools
+
+    messages: list = [{"role": "user", "content": user_prompt}]
+
+    while True:
+        response = client.messages.create(**base_kwargs, messages=messages)
+
+        if response.stop_reason != "tool_use":
+            break
+
+        messages.append({"role": "assistant", "content": response.content})
+        messages.append({
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": _handle_tool_call(block.name, block.input),
+                }
+                for block in response.content
+                if block.type == "tool_use"
+            ],
+        })
+
+    content = next((block.text for block in response.content if block.type == "text"), None)
+    if not content:
+        raise LLMResponseError("LLM returned empty response")
+    return content
+
+
 def generate_itinerary_days(
     *,
     destination: str,
@@ -102,22 +168,19 @@ def generate_itinerary_days(
         trip_style=trip_style,
     )
 
-    try:
-        response = client.messages.create(
-            model=settings.anthropic_model,
-            max_tokens=settings.anthropic_max_tokens,
-            temperature=settings.anthropic_temperature,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-    except Exception as exc:
-        raise LLMResponseError("LLM service request failed") from exc
+    last_exc: LLMResponseError | None = None
 
-    if not response.content:
-        raise LLMResponseError("LLM returned empty response")
+    for _ in range(settings.llm_max_retries + 1):
+        try:
+            raw = _call_llm(client, settings, user_prompt)
+        except Exception as exc:
+            raise LLMResponseError("LLM service request failed") from exc
 
-    content = next((block.text for block in response.content if block.type == "text"), None)
-    if not content:
-        raise LLMResponseError("LLM returned empty response")
+        try:
+            return _parse_days_payload(raw, expected_days=days)
+        except LLMResponseError as exc:
+            last_exc = exc
 
-    return _parse_days_payload(content, expected_days=days)
+    if last_exc is not None:
+        raise last_exc
+    raise LLMResponseError("LLM failed to return a valid response")
