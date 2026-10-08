@@ -143,6 +143,61 @@ def test_tool_use_loop_calls_weather_and_continues():
     assert mock_client.messages.create.call_count == 2
 
 
+def test_rag_context_injected_into_system_prompt():
+    kb_hits = [{"title": "Hidden gems", "content": "Visit Galerie Vivienne."}]
+
+    with patch("app.services.llm_itinerary.Anthropic") as mock_cls, \
+         patch("app.services.llm_itinerary.knowledge_base.search", return_value=kb_hits), \
+         patch("app.services.llm_itinerary.get_settings") as mock_settings:
+        mock_settings.return_value = _mock_settings(llm_max_retries=0)
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = _text_response(_VALID_JSON)
+
+        llm.generate_itinerary_days(
+            destination="Paris", days=1, budget=1000.0, trip_style="budget"
+        )
+
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    assert "Local Knowledge" in call_kwargs["system"]
+    assert "Galerie Vivienne" in call_kwargs["system"]
+
+
+def test_rag_fallback_when_kb_empty():
+    with patch("app.services.llm_itinerary.Anthropic") as mock_cls, \
+         patch("app.services.llm_itinerary.knowledge_base.search", return_value=[]), \
+         patch("app.services.llm_itinerary.get_settings") as mock_settings:
+        mock_settings.return_value = _mock_settings(llm_max_retries=0)
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = _text_response(_VALID_JSON)
+
+        llm.generate_itinerary_days(
+            destination="Paris", days=1, budget=1000.0, trip_style="budget"
+        )
+
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    assert "Local Knowledge" not in call_kwargs["system"]
+
+
+def test_rag_fallback_when_kb_raises():
+    with patch("app.services.llm_itinerary.Anthropic") as mock_cls, \
+         patch("app.services.llm_itinerary.knowledge_base.search", side_effect=Exception("KB down")), \
+         patch("app.services.llm_itinerary.get_settings") as mock_settings:
+        mock_settings.return_value = _mock_settings(llm_max_retries=0)
+        mock_client = MagicMock()
+        mock_cls.return_value = mock_client
+        mock_client.messages.create.return_value = _text_response(_VALID_JSON)
+
+        result = llm.generate_itinerary_days(
+            destination="Paris", days=1, budget=1000.0, trip_style="budget"
+        )
+
+    assert len(result) == 1
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    assert "Local Knowledge" not in call_kwargs["system"]
+
+
 def test_tool_use_weather_failure_does_not_abort_generation():
     with patch("app.services.llm_itinerary.Anthropic") as mock_cls, \
          patch("app.services.llm_itinerary.get_current_weather") as mock_weather, \
