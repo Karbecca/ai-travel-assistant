@@ -6,10 +6,12 @@ from app.core.config import get_settings
 from app.core.database import Base, engine
 from app.routers.auth import router as auth_router
 from app.routers.health import router as health_router
+from app.routers.image import router as image_router
 from app.routers.itineraries import router as itineraries_router
 from app.routers.knowledge import router as knowledge_router
 from app.routers.trips import router as trips_router
 from app.routers.users import router as users_router
+from app.routers.voice import router as voice_router
 
 settings = get_settings()
 
@@ -20,6 +22,8 @@ _OPENAPI_TAGS = [
     {"name": "Trips", "description": "CRUD for trips owned by the current user."},
     {"name": "Itineraries", "description": "Create and fetch itineraries linked to a trip."},
     {"name": "Knowledge", "description": "Travel knowledge base: add documents and run semantic search."},
+    {"name": "Voice", "description": "Speech-to-text transcription and text-to-speech synthesis."},
+    {"name": "Image", "description": "Analyze travel destination images using Claude vision."},
 ]
 
 
@@ -49,3 +53,5 @@ app.include_router(users_router, prefix="/users")
 app.include_router(trips_router, prefix="/trips")
 app.include_router(itineraries_router, prefix="/itineraries")
 app.include_router(knowledge_router, prefix="/knowledge")
+app.include_router(voice_router, prefix="/voice")
+app.include_router(image_router, prefix="/image")
