@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     weather_api_key: str = ""
     opentripmap_api_key: str = ""
     vector_store_path: str = "./vector_store"
+    dd_agent_host: str = "localhost"
+    dd_statsd_port: int = 8125
+    dd_service: str = "ai-travel-assistant"
+    dd_env: str = "development"
+    guardrail_max_input_length: int = 2000
+    guardrail_min_days: int = 1
+    guardrail_max_days: int = 30
 
     model_config = SettingsConfigDict(
         env_file=".env",
