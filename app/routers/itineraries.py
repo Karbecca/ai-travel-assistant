@@ -4,13 +4,16 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.observability import record_guardrail_rejection
 from app.deps import get_current_user
 from app.models.itinerary import Itinerary
 from app.models.trip import Trip
 from app.models.user import User
 from app.schemas.itinerary import ItineraryCreate, ItineraryCreateResponse, ItineraryDayPublic, ItineraryPublic
 from app.services.audit_log import record_itinerary_saved
+from app.services.guardrails import GuardrailInputError, GuardrailOutputError, validate_itinerary_input
 from app.services.llm_itinerary import LLMConfigurationError, LLMResponseError, generate_itinerary_days
 
 router = APIRouter(tags=["Itineraries"])
@@ -52,6 +55,14 @@ def create_or_update_itinerary(
 
     if payload.generate:
         try:
+            validate_itinerary_input(
+                trip.destination, trip.trip_style, trip.days, get_settings()
+            )
+        except GuardrailInputError as exc:
+            record_guardrail_rejection("input", exc.field)
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+        try:
             stored = generate_itinerary_days(
                 destination=trip.destination,
                 days=trip.days,
@@ -64,6 +75,12 @@ def create_or_update_itinerary(
                 detail=str(exc),
             ) from exc
         except LLMResponseError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+        except GuardrailOutputError as exc:
+            record_guardrail_rejection("output", exc.check)
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=str(exc),
