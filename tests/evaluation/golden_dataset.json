@@ -1,0 +1,30 @@
+[
+  {
+    "destination": "Tokyo",
+    "trip_style": "cultural",
+    "num_days": 3,
+    "expected_days": 3,
+    "must_contain_keywords": ["Tokyo", "temple", "museum"]
+  },
+  {
+    "destination": "Paris",
+    "trip_style": "romantic",
+    "num_days": 2,
+    "expected_days": 2,
+    "must_contain_keywords": ["Paris", "Eiffel"]
+  },
+  {
+    "destination": "Bali",
+    "trip_style": "relaxation",
+    "num_days": 5,
+    "expected_days": 5,
+    "must_contain_keywords": ["Bali", "beach", "temple"]
+  },
+  {
+    "destination": "New York",
+    "trip_style": "adventure",
+    "num_days": 4,
+    "expected_days": 4,
+    "must_contain_keywords": ["New York", "Manhattan"]
+  }
+]

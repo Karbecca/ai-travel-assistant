@@ -29,6 +29,9 @@ _OPENAPI_TAGS = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.core.observability import setup_datadog
+    setup_datadog(settings)
+
     import app.models.itinerary  # noqa: F401
     import app.models.trip  # noqa: F401
     import app.models.user  # noqa: F401

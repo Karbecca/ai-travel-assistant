@@ -36,8 +36,7 @@ class AgentInput(TypedDict):
     trip_style: str
 
 
-def run_travel_agent(input: AgentInput) -> str:
-    """Run the two-step LangGraph agent and return raw JSON string."""
+def run_travel_agent(input: AgentInput) -> tuple[str, int, int]:
     settings = get_settings()
     llm = ChatAnthropic(
         model=settings.anthropic_model,
@@ -78,4 +77,11 @@ def run_travel_agent(input: AgentInput) -> str:
         HumanMessage(content=format_prompt),
     ])
 
-    return format_response.content
+    usage = getattr(format_response, "usage_metadata", None)
+    if not isinstance(usage, dict):
+        usage = {}
+    return (
+        format_response.content,
+        usage.get("input_tokens", 0),
+        usage.get("output_tokens", 0),
+    )
