@@ -1,8 +1,15 @@
 import json
+import logging
 import re
+import time
 
 from app.core.config import get_settings
+from app.core.observability import record_evaluation_score, record_llm_call
 from app.services.agent import AgentInput, run_travel_agent
+from app.services.evaluation import evaluate_itinerary_response
+from app.services.guardrails import GuardrailOutputError, validate_itinerary_output
+
+logger = logging.getLogger(__name__)
 
 
 class LLMConfigurationError(Exception):
@@ -59,17 +66,42 @@ def generate_itinerary_days(
         "trip_style": trip_style,
     }
 
+    start = time.monotonic()
+    success = False
+    prompt_tokens = completion_tokens = 0
     last_exc: LLMResponseError | None = None
-    for _ in range(settings.llm_max_retries + 1):
-        try:
-            raw = run_travel_agent(agent_input)
-        except Exception as exc:
-            raise LLMResponseError("LLM service request failed") from exc
-        try:
-            return _parse_days(raw, expected=days)
-        except LLMResponseError as exc:
-            last_exc = exc
 
-    if last_exc is not None:
-        raise last_exc
-    raise LLMResponseError("LLM failed to return a valid response")
+    try:
+        for _ in range(settings.llm_max_retries + 1):
+            try:
+                raw, prompt_tokens, completion_tokens = run_travel_agent(agent_input)
+            except Exception as exc:
+                raise LLMResponseError("LLM service request failed") from exc
+            try:
+                parsed = _parse_days(raw, expected=days)
+            except LLMResponseError as exc:
+                last_exc = exc
+                continue
+
+            validate_itinerary_output(raw, expected_days=days)
+
+            report = evaluate_itinerary_response(parsed, destination, trip_style, days)
+            record_evaluation_score(report.relevance_score, report.completeness_score, report.overall_pass)
+            if not report.overall_pass:
+                logger.warning("Itinerary evaluation below threshold: %s", report.details)
+
+            success = True
+            return parsed
+
+        if last_exc is not None:
+            raise last_exc
+        raise LLMResponseError("LLM failed to return a valid response")
+
+    finally:
+        record_llm_call(
+            model=settings.anthropic_model,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            latency_ms=(time.monotonic() - start) * 1000,
+            success=success,
+        )

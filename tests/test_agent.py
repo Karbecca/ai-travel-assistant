@@ -62,7 +62,10 @@ def test_run_travel_agent_returns_string():
 
         result = run_travel_agent(_AGENT_INPUT)
 
-    assert result == _VALID_JSON
+    json_str, prompt_tokens, completion_tokens = result
+    assert json_str == _VALID_JSON
+    assert isinstance(prompt_tokens, int)
+    assert isinstance(completion_tokens, int)
 
 
 def test_run_travel_agent_passes_all_tools():
